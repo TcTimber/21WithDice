@@ -1,0 +1,111 @@
+BETTING SYSTEM DESIGN — 21 WITH DICE
+=====================================
+
+OVERVIEW
+--------
+Betting is an optional feature that can be toggled on/off from
+a settings menu. When off, the game plays exactly as it does
+today (win/loss tracking only). When on, players wager chips
+before each hand.
+
+CHIP DENOMINATIONS
+------------------
+  $1   — White chip
+  $5   — Red chip
+  $25  — Green chip, black accents
+  $100 — Black chip, gold accents
+
+Chips are rendered as circular nodes with edge dashes/accents
+matching casino style. Stacked when multiple of same denomination.
+
+BANKROLL
+--------
+- Starting bankroll: $200
+- Bankroll persists across sessions (saved to UserDefaults)
+- Displayed in the score area (replaces or supplements win/loss
+  counter when betting is active)
+
+PLACING BETS
+------------
+- Before each hand, a betting phase replaces the "Deal" button
+- Chip buttons appear along the bottom rail
+- Tap a chip to add it to the bet (chips stack in a betting circle)
+- Tap the bet stack to remove the last chip added
+- Minimum bet: $1
+- Maximum bet: limited by current bankroll
+- "Deal" button appears once a valid bet is placed
+- Narration: "Place your bet."
+
+PAYOUTS
+-------
+  Standard win:        1:1 (bet returned + equal winnings)
+  Three sixes (18):    Special — $200 flat bonus + bet returned
+  Dealer wins:         Bet lost
+  Tie:                 Bet lost (ties go to dealer)
+
+Example: Player bets $25 and wins normally → receives $50 back
+         Player bets $10 and rolls three sixes → receives $10 + $200 = $210
+
+BANKROLL DEPLETION & RELOAD
+----------------------------
+When bankroll reaches $0:
+  1. Offer ONE free reload per app session ($200)
+     - Narration: "Tough luck. Here's a fresh $200 on the house."
+     - Session = from app launch to app termination
+     - Track via in-memory flag (resets on app launch)
+  2. After free reload is used, offer IAP purchase:
+     - $1,000 in chips for $1.99 (consumable IAP)
+     - Narration: "Out of chips. Visit the cashier?"
+     - Button: "Buy $1,000 Chips — $1.99"
+  3. If player declines purchase, betting auto-disables and
+     game reverts to free play mode (win/loss tracking only)
+
+IAP HOOKS (StoreKit 2)
+-----------------------
+Prepare the following integration points (not coded yet):
+
+  1. Product ID: "com.21withdice.chips1000"
+     Type: Consumable
+     Price: $1.99
+     Delivers: +$1,000 to bankroll
+
+  2. ChipStore manager class:
+     - loadProducts()      → fetch product info from App Store
+     - purchase()          → initiate transaction
+     - handleTransaction() → credit bankroll on success
+     - restorePurchases()  → no-op for consumables (nothing to restore)
+
+  3. Cashier UI:
+     - Modal overlay on the game scene
+     - Shows current bankroll, purchase option, "No thanks" dismiss
+     - Triggered when bankroll = 0 and free reload exhausted
+
+  4. Receipt validation:
+     - Use StoreKit 2 Transaction.currentEntitlements
+     - Server validation NOT required for consumables at this scale
+
+SETTINGS INTEGRATION
+--------------------
+  - Toggle: "Enable Betting" (on/off)
+  - Accessible from a gear icon or menu
+  - When toggled off mid-session: current bet is refunded, game
+    reverts to free play mode
+  - When toggled on: betting phase begins on next hand
+
+DATA PERSISTENCE
+----------------
+  - Bankroll: UserDefaults key "playerBankroll" (Int)
+  - Betting enabled: UserDefaults key "bettingEnabled" (Bool)
+  - Free reload used: in-memory Bool (resets each launch)
+  - Win/loss counters: persist regardless of betting mode
+
+GAME SCENE CHANGES NEEDED
+--------------------------
+  1. Add chip button bar (below roll buttons area, or replaces
+     roll buttons during betting phase)
+  2. Add bet display area (center of player zone, chip stack visual)
+  3. Add bankroll display label
+  4. Add settings gear icon (top corner)
+  5. Modify endHand() to process payout/loss
+  6. Add betting phase state to GameState enum
+  7. Add cashier modal overlay for IAP

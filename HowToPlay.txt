@@ -1,0 +1,54 @@
+HOW TO PLAY — 21 WITH DICE
+===========================
+
+OBJECTIVE
+---------
+Roll dice to get as close to 21 as possible without going over.
+The dealer (computer) is your opponent. Beat the dealer's total to win!
+
+GAME FLOW
+---------
+1. The dealer rolls first and reveals only one of its dice to you.
+   The rest remain hidden.
+
+2. It's your turn. Choose to roll 1, 2, or 3 dice.
+   The values are added to your running total.
+
+3. You may roll up to 4 times per hand.
+   After each roll, you can choose to STAND (keep your total)
+   or roll again.
+
+4. If your total goes over 21, you BUST and the dealer wins.
+
+5. After you stand (or use all 4 rolls), the dealer reveals
+   its hidden dice and completes its turn.
+
+6. The dealer must roll again if its total is 16 or less.
+   The dealer must stand when its total reaches 17 or higher.
+
+7. The highest total at or below 21 wins.
+   Ties go to the dealer.
+
+INSTANT WIN
+-----------
+If you roll three sixes (18) on your FIRST roll, you win
+instantly — the dealer doesn't get to finish!
+
+STRATEGY TIPS
+-------------
+- Watch the dealer's revealed die. A high die may mean the
+  dealer already has a strong hand. A low die may be a bluff.
+
+- Rolling 1 die is safe but slow. Rolling 3 dice is fast but
+  risky. Mix it up based on your total.
+
+- You don't have to use all 4 rolls. Sometimes standing at
+  17 or 18 is the smart play.
+
+- The dealer MUST hit on 16 or below, which means the dealer
+  can bust too. A conservative strategy can pay off.
+
+BETTING (OPTIONAL)
+------------------
+When betting is enabled, you place chips before each hand.
+See the betting rules for chip denominations and payouts.
