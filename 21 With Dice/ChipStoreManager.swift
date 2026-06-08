@@ -8,38 +8,55 @@ import StoreKit
 class ChipStoreManager {
 
     static let shared = ChipStoreManager()
-    static let chips1000ID = "com.21withdice.chips1000"
 
-    private var product: Product?
+    struct ChipOffer {
+        let productID: String
+        let chips: Int
+        let defaultPriceString: String
+    }
+
+    static let offers: [ChipOffer] = [
+        ChipOffer(productID: "com.21withdice.chips200", chips: 200, defaultPriceString: "$0.99"),
+        ChipOffer(productID: "com.21withdice.chips500", chips: 500, defaultPriceString: "$1.99")
+    ]
+
+    private var products: [String: Product] = [:]
 
     private init() {}
 
-    var priceString: String {
-        product?.displayPrice ?? "$1.99"
+    func priceString(for productID: String) -> String {
+        if let p = products[productID] { return p.displayPrice }
+        return Self.offers.first(where: { $0.productID == productID })?.defaultPriceString ?? ""
+    }
+
+    func chipAmount(for productID: String) -> Int {
+        Self.offers.first(where: { $0.productID == productID })?.chips ?? 0
     }
 
     var isAvailable: Bool {
-        product != nil
+        !products.isEmpty
     }
 
     func loadProducts() async {
         do {
-            let products = try await Product.products(for: [Self.chips1000ID])
-            product = products.first
+            let ids = Self.offers.map { $0.productID }
+            let fetched = try await Product.products(for: ids)
+            for p in fetched { products[p.id] = p }
         } catch {
             print("StoreKit: Failed to load products: \(error)")
         }
     }
 
-    func purchase() async -> Bool {
-        guard let product else { return false }
+    func purchase(productID: String) async -> Bool {
+        guard let product = products[productID] else { return false }
+        let chips = chipAmount(for: productID)
         do {
             let result = try await product.purchase()
             switch result {
             case .success(let verification):
                 let transaction = try verification.payloadValue
                 await MainActor.run {
-                    BettingManager.shared.bankroll += 1000
+                    BettingManager.shared.bankroll += chips
                 }
                 await transaction.finish()
                 return true

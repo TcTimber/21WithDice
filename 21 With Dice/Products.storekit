@@ -1,0 +1,50 @@
+{
+  "identifier" : "21WithDiceProducts",
+  "nonRenewingSubscriptions" : [],
+  "products" : [
+    {
+      "displayPrice" : "0.99",
+      "familyShareable" : false,
+      "internalID" : "1000000001",
+      "localizations" : [
+        {
+          "description" : "Adds $200 to your bankroll.",
+          "displayName" : "$200 in Chips",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.21withdice.chips200",
+      "referenceName" : "200 Chips",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "1.99",
+      "familyShareable" : false,
+      "internalID" : "1000000002",
+      "localizations" : [
+        {
+          "description" : "Adds $500 to your bankroll. Better value!",
+          "displayName" : "$500 in Chips",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.21withdice.chips500",
+      "referenceName" : "500 Chips",
+      "type" : "Consumable"
+    }
+  ],
+  "settings" : {
+    "_applicationInternalID" : "21WithDice",
+    "_developerTeamID" : "785VXA7QK5",
+    "_failTransactionsEnabled" : false,
+    "_lastSynchronizedDate" : 0,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : []
+  },
+  "subscriptionGroups" : [],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}
