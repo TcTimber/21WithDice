@@ -51,7 +51,12 @@ class LeaderboardManager {
     }
 
     func recordScore(_ score: Int) {
-        guard let name = playerName, score > 0 else { return }
+        guard let name = playerName else { return }
+        recordScore(score, for: name)
+    }
+
+    func recordScore(_ score: Int, for name: String) {
+        guard score > 0 else { return }
 
         if let idx = entries.firstIndex(where: { $0.name == name }) {
             if score > entries[idx].score {

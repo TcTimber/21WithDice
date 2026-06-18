@@ -12,7 +12,6 @@ class GameScene: SKScene {
 
     private enum GameState {
         case idle
-        case betting
         case playerTurn
         case animating
         case handOver
@@ -34,7 +33,21 @@ class GameScene: SKScene {
     private var playerWins = 0
     private var computerWins = 0
 
-    private let betting = BettingManager.shared
+    private var voiceEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: "voiceEnabled") == nil { return true }
+            return UserDefaults.standard.bool(forKey: "voiceEnabled")
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "voiceEnabled") }
+    }
+
+    private var oddsTableEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: "oddsTableEnabled") == nil { return true }
+            return UserDefaults.standard.bool(forKey: "oddsTableEnabled")
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "oddsTableEnabled") }
+    }
 
     // MARK: - UI Nodes — Labels
 
@@ -45,7 +58,6 @@ class GameScene: SKScene {
     private var narrationLabel: SKLabelNode!
     private var scoreLabel: SKLabelNode!
     private var rollInfoLabel: SKLabelNode!
-    private var betAmountLabel: SKLabelNode!
 
     // MARK: - UI Nodes — Dice
 
@@ -56,26 +68,30 @@ class GameScene: SKScene {
 
     private var rollButtonsNode: SKNode!
     private var dealButtonNode: SKNode!
-    private var chipButtonsNode: SKNode!
-    private var reloadButtonNode: SKNode!
-    private var winOptionsNode: SKNode!
 
     private var helpButtonNode: SKNode!
     private var settingsButtonNode: SKNode!
 
-    // MARK: - UI Nodes — Bet Area
+    // MARK: - UI Nodes — Probability Table
 
-    private var betAreaNode: SKNode!
+    private var probabilityTableNode: SKNode!
 
     // MARK: - UI Nodes — Overlays
 
     private var overlayNode: SKNode?
     private var howToPlayView: UIView?
+    private var namePromptView: UIView?
+    private var leaderboardView: UIView?
+    private var settingsView: UIView?
 
     // MARK: - Layout
 
     private var dieSize: CGFloat = 50
-    private var chipSize: CGFloat = 45
+
+    private var uiScale: CGFloat {
+        let baseHeight: CGFloat = 430
+        return min(max(size.height / baseHeight, 1.0), 1.7)
+    }
 
     // MARK: - Audio
 
@@ -86,11 +102,27 @@ class GameScene: SKScene {
 
     override func didMove(to view: SKView) {
         dieSize = min(size.width, size.height) * 0.09
-        chipSize = dieSize * 1.2
         setupScene()
         setupClickSound()
-        Task { await ChipStoreManager.shared.loadProducts() }
-        beginNewRound()
+
+        if !LeaderboardManager.shared.hasPlayerName {
+            showNamePrompt()
+        } else {
+            showWelcomeScreen()
+        }
+    }
+
+    private func showWelcomeScreen() {
+        clearTable()
+        rollInfoLabel.text = ""
+        rollButtonsNode.isHidden = true
+        dealButtonNode.isHidden = false
+        gameState = .idle
+        updateScoreDisplay()
+
+        let name = LeaderboardManager.shared.playerName
+        let greeting = name.map { "Welcome, \($0)!" } ?? "Welcome!"
+        narrate("\(greeting) Tap Settings, or New Hand to begin.")
     }
 
     // MARK: - Scene Setup
@@ -104,7 +136,7 @@ class GameScene: SKScene {
         setupMenuButtons()
 
         // Dealer area
-        dealerTitleLabel = makeLabel("DEALER", size: 22, bold: true)
+        dealerTitleLabel = makeLabel("COMPUTER", size: 22, bold: true)
         dealerTitleLabel.position = CGPoint(x: w * 0.14, y: h * 0.91)
         dealerTitleLabel.horizontalAlignmentMode = .left
         addChild(dealerTitleLabel)
@@ -124,20 +156,6 @@ class GameScene: SKScene {
         narrationLabel.numberOfLines = 2
         narrationLabel.preferredMaxLayoutWidth = w * 0.75
         addChild(narrationLabel)
-
-        // Bet area (visual chip stack)
-        betAreaNode = SKNode()
-        betAreaNode.position = CGPoint(x: w * 0.5, y: h * 0.50)
-        betAreaNode.isHidden = true
-        addChild(betAreaNode)
-
-        // Bet amount (large, prominent during betting phase)
-        betAmountLabel = makeLabel("", size: 22, bold: true)
-        betAmountLabel.fontColor = UIColor(red: 1.0, green: 0.85, blue: 0.2, alpha: 1.0)
-        betAmountLabel.position = CGPoint(x: w * 0.5, y: h * 0.43)
-        betAmountLabel.horizontalAlignmentMode = .center
-        betAmountLabel.isHidden = true
-        addChild(betAmountLabel)
 
         // Score
         scoreLabel = makeLabel("Wins: 0  |  Losses: 0", size: 15, bold: false)
@@ -167,9 +185,92 @@ class GameScene: SKScene {
 
         setupRollButtons()
         setupDealButton()
-        setupChipButtons()
-        setupReloadButton()
-        setupWinOptions()
+        setupProbabilityTable()
+    }
+
+    private func setupProbabilityTable() {
+        probabilityTableNode = SKNode()
+        probabilityTableNode.position = CGPoint(x: size.width * 0.18, y: size.height * 0.50)
+        probabilityTableNode.isHidden = true
+        addChild(probabilityTableNode)
+    }
+
+    private func updateProbabilityTable() {
+        probabilityTableNode.removeAllChildren()
+
+        guard oddsTableEnabled, playerTotal >= 10, gameState == .playerTurn else {
+            probabilityTableNode.isHidden = true
+            return
+        }
+        probabilityTableNode.isHidden = false
+
+        let cellW: CGFloat = 68 * uiScale
+        let cellH: CGFloat = 24 * uiScale
+        let leftW: CGFloat = 68 * uiScale
+        let totalW = leftW + 3 * cellW
+        let totalH: CGFloat = 4 * cellH
+
+        let bg = SKShapeNode(rectOf: CGSize(width: totalW + 14, height: totalH + 10), cornerRadius: 6)
+        bg.fillColor = UIColor(white: 0, alpha: 0.55)
+        bg.strokeColor = UIColor(red: 0.8, green: 0.6, blue: 0.2, alpha: 0.6)
+        bg.lineWidth = 1
+        probabilityTableNode.addChild(bg)
+
+        let xLabel = -totalW / 2 + leftW / 2
+        let xCol1 = xLabel + leftW / 2 + cellW / 2
+        let xCol2 = xCol1 + cellW
+        let xCol3 = xCol2 + cellW
+        let yHeader = totalH / 2 - cellH / 2
+        let goldColor = UIColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
+
+        let h1 = makeProbCell("\u{1F340}21", color: goldColor, bold: true)
+        h1.position = CGPoint(x: xCol1, y: yHeader)
+        probabilityTableNode.addChild(h1)
+
+        let h2 = makeProbCell("17+", color: goldColor, bold: true)
+        h2.position = CGPoint(x: xCol2, y: yHeader)
+        probabilityTableNode.addChild(h2)
+
+        let h3 = makeProbCell("\u{1F480}", color: goldColor, bold: true)
+        h3.position = CGPoint(x: xCol3, y: yHeader)
+        probabilityTableNode.addChild(h3)
+
+        for (i, dice) in [1, 2, 3].enumerated() {
+            let y = yHeader - CGFloat(i + 1) * cellH
+            let labelText = dice == 1 ? "1 Die" : "\(dice) Dice"
+            let label = makeProbCell(labelText, color: .white, bold: false)
+            label.position = CGPoint(x: xLabel, y: y)
+            probabilityTableNode.addChild(label)
+
+            let h21Pct = Probability.hit21(currentTotal: playerTotal, diceCount: dice)
+            let r17Pct = Probability.reach17Plus(currentTotal: playerTotal, diceCount: dice)
+            let bustPct = Probability.bust(currentTotal: playerTotal, diceCount: dice)
+
+            let cols = [xCol1, xCol2, xCol3]
+            let vals = [h21Pct, r17Pct, bustPct]
+            for j in 0..<3 {
+                let (text, color) = formatProbability(vals[j])
+                let cell = makeProbCell(text, color: color, bold: false)
+                cell.position = CGPoint(x: cols[j], y: y)
+                probabilityTableNode.addChild(cell)
+            }
+        }
+    }
+
+    private func makeProbCell(_ text: String, color: UIColor, bold: Bool) -> SKLabelNode {
+        let label = SKLabelNode(text: text)
+        label.fontName = bold ? "Helvetica-Bold" : "Helvetica"
+        label.fontSize = 15 * uiScale
+        label.fontColor = color
+        label.verticalAlignmentMode = .center
+        label.horizontalAlignmentMode = .center
+        return label
+    }
+
+    private func formatProbability(_ v: Double) -> (String, UIColor) {
+        if v < 0.05 { return ("N/A", UIColor(white: 0.5, alpha: 1)) }
+        if v > 99.95 { return ("X", UIColor(red: 1, green: 0.25, blue: 0.25, alpha: 1)) }
+        return (String(format: "%.1f%%", v), .white)
     }
 
     private func setupMenuButtons() {
@@ -186,7 +287,7 @@ class GameScene: SKScene {
         hBg.lineWidth = 1.5; hBg.name = "helpBtn"
         helpButtonNode.addChild(hBg)
         let hLbl = SKLabelNode(text: "?")
-        hLbl.fontName = "Helvetica-Bold"; hLbl.fontSize = 18; hLbl.fontColor = .white
+        hLbl.fontName = "Helvetica-Bold"; hLbl.fontSize = 18 * uiScale; hLbl.fontColor = .white
         hLbl.verticalAlignmentMode = .center; hLbl.name = "helpBtn"
         helpButtonNode.addChild(hLbl)
         addChild(helpButtonNode)
@@ -200,7 +301,7 @@ class GameScene: SKScene {
         sBg.lineWidth = 1.5; sBg.name = "settingsBtn"
         settingsButtonNode.addChild(sBg)
         let sLbl = SKLabelNode(text: "\u{2699}")
-        sLbl.fontSize = 20; sLbl.verticalAlignmentMode = .center; sLbl.name = "settingsBtn"
+        sLbl.fontSize = 20 * uiScale; sLbl.verticalAlignmentMode = .center; sLbl.name = "settingsBtn"
         settingsButtonNode.addChild(sLbl)
         addChild(settingsButtonNode)
     }
@@ -260,80 +361,12 @@ class GameScene: SKScene {
         dealButtonNode.isHidden = true
     }
 
-    private func setupChipButtons() {
-        let w = size.width
-        let h = size.height
-        let y = h * 0.06
-
-        chipButtonsNode = SKNode()
-        addChild(chipButtonsNode)
-
-        let denominations = [5, 25, 100]
-        let xPositions: [CGFloat] = [0.14, 0.28, 0.42]
-
-        for (i, denom) in denominations.enumerated() {
-            let chip = ChipNode(denomination: denom, size: chipSize)
-            chip.name = "chip\(denom)"
-            chip.position = CGPoint(x: w * xPositions[i], y: y)
-            chipButtonsNode.addChild(chip)
-        }
-
-        let clearBtn = makeButton(text: "Clear Bet", width: w * 0.14, height: 40, name: "clearBet")
-        clearBtn.position = CGPoint(x: w * 0.63, y: y)
-        chipButtonsNode.addChild(clearBtn)
-
-        let dealBtn = makeButton(text: "Deal", width: w * 0.14, height: 40, name: "dealBet")
-        dealBtn.position = CGPoint(x: w * 0.80, y: y)
-        chipButtonsNode.addChild(dealBtn)
-
-        chipButtonsNode.isHidden = true
-    }
-
-    private func setupReloadButton() {
-        let w = size.width
-        let h = size.height
-
-        reloadButtonNode = makeButton(text: "Free Reload \u{2014} $200", width: w * 0.30, height: 46, name: "reloadBtn")
-        reloadButtonNode.position = CGPoint(x: w * 0.5, y: h * 0.06)
-        addChild(reloadButtonNode)
-        reloadButtonNode.isHidden = true
-    }
-
-    private func setupWinOptions() {
-        let w = size.width
-        let h = size.height
-        let btnW = w * 0.19
-        let btnH: CGFloat = 42
-        let y = h * 0.06
-
-        winOptionsNode = SKNode()
-        addChild(winOptionsNode)
-
-        let btn1 = makeButton(text: "Let it Ride", width: btnW, height: btnH, name: "letItRide")
-        btn1.position = CGPoint(x: w * 0.12, y: y)
-        winOptionsNode.addChild(btn1)
-
-        let btn2 = makeButton(text: "Repeat Bet", width: btnW, height: btnH, name: "repeatBet")
-        btn2.position = CGPoint(x: w * 0.35, y: y)
-        winOptionsNode.addChild(btn2)
-
-        let btn3 = makeButton(text: "New Bet", width: btnW, height: btnH, name: "newBet")
-        btn3.position = CGPoint(x: w * 0.58, y: y)
-        winOptionsNode.addChild(btn3)
-
-        let btn4 = makeButton(text: "Take Winnings", width: btnW, height: btnH, name: "takeWinnings")
-        btn4.position = CGPoint(x: w * 0.84, y: y)
-        winOptionsNode.addChild(btn4)
-
-        winOptionsNode.isHidden = true
-    }
-
     // MARK: - UI Helpers
 
     private func makeLabel(_ text: String, size: CGFloat, bold: Bool) -> SKLabelNode {
         let label = SKLabelNode(text: text)
         label.fontName = bold ? "Helvetica-Bold" : "Helvetica"
-        label.fontSize = size
+        label.fontSize = size * uiScale
         label.fontColor = .white
         label.verticalAlignmentMode = .center
         return label
@@ -343,7 +376,8 @@ class GameScene: SKScene {
         let container = SKNode()
         container.name = name
 
-        let bg = SKShapeNode(rectOf: CGSize(width: width, height: height), cornerRadius: 8)
+        let scaledH = height * uiScale
+        let bg = SKShapeNode(rectOf: CGSize(width: width, height: scaledH), cornerRadius: 8)
         bg.fillColor = UIColor(red: 0.55, green: 0.10, blue: 0.10, alpha: 1.0)
         bg.strokeColor = UIColor(red: 0.80, green: 0.60, blue: 0.18, alpha: 1.0)
         bg.lineWidth = 2
@@ -352,7 +386,7 @@ class GameScene: SKScene {
 
         let label = SKLabelNode(text: text)
         label.fontName = "Helvetica-Bold"
-        label.fontSize = 15
+        label.fontSize = 15 * uiScale
         label.fontColor = .white
         label.verticalAlignmentMode = .center
         label.name = name
@@ -373,65 +407,7 @@ class GameScene: SKScene {
     }
 
     private func updateScoreDisplay() {
-        if betting.bettingEnabled {
-            if gameState == .betting {
-                scoreLabel.text = "Bankroll: $\(betting.bankroll)    W:\(playerWins) L:\(computerWins)"
-                betAmountLabel.text = "Bet: $\(betting.currentBet)"
-                betAmountLabel.isHidden = false
-            } else {
-                scoreLabel.text = "Bankroll: $\(betting.bankroll)  Bet: $\(betting.currentBet)  W:\(playerWins) L:\(computerWins)"
-                betAmountLabel.isHidden = true
-            }
-        } else {
-            scoreLabel.text = "Wins: \(playerWins)  |  Losses: \(computerWins)"
-            betAmountLabel.isHidden = true
-        }
-    }
-
-    private func updateChipButtonStates() {
-        for denom in [5, 25, 100] {
-            if let chip = chipButtonsNode.childNode(withName: "chip\(denom)") {
-                chip.alpha = betting.bankroll >= denom ? 1.0 : 0.3
-            }
-        }
-        if let dealBtn = chipButtonsNode.childNode(withName: "dealBet") {
-            dealBtn.alpha = betting.hasBet ? 1.0 : 0.3
-        }
-    }
-
-    // MARK: - Bet Area Visuals
-
-    private func animateChipToBetArea(denomination: Int) {
-        guard let sourceChip = chipButtonsNode.childNode(withName: "chip\(denomination)") else { return }
-        let startPos = sourceChip.position
-
-        let flyingChip = ChipNode(denomination: denomination, size: chipSize * 0.65)
-        flyingChip.position = startPos
-        flyingChip.zPosition = 50
-        addChild(flyingChip)
-
-        let chipIndex = betAreaNode.children.count
-        let stackOffset = CGPoint(x: CGFloat.random(in: -10...10), y: CGFloat(chipIndex) * 3)
-        let landingPos = CGPoint(x: betAreaNode.position.x + stackOffset.x,
-                                 y: betAreaNode.position.y + stackOffset.y)
-
-        let move = SKAction.move(to: landingPos, duration: 0.25)
-        move.timingMode = .easeOut
-
-        flyingChip.run(SKAction.sequence([
-            move,
-            SKAction.run { [weak self, weak flyingChip] in
-                flyingChip?.removeFromParent()
-                guard let self = self else { return }
-                let stacked = ChipNode(denomination: denomination, size: self.chipSize * 0.55)
-                stacked.position = stackOffset
-                self.betAreaNode.addChild(stacked)
-            }
-        ]))
-    }
-
-    private func clearBetArea() {
-        betAreaNode.removeAllChildren()
+        scoreLabel.text = "Wins: \(playerWins)  |  Losses: \(computerWins)"
     }
 
     // MARK: - Dice Helpers
@@ -507,6 +483,11 @@ class GameScene: SKScene {
     private func narrate(_ text: String) {
         narrationLabel.text = text
 
+        guard voiceEnabled else {
+            speaker.stopSpeaking(at: .immediate)
+            return
+        }
+
         let utterance = AVSpeechUtterance(string: text)
         utterance.rate = 0.48
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
@@ -532,6 +513,7 @@ class GameScene: SKScene {
 
         dealerTotalLabel.text = "Total: --"
         playerTotalLabel.text = "Total: 0"
+        updateProbabilityTable()
     }
 
     private func beginNewRound() {
@@ -539,36 +521,16 @@ class GameScene: SKScene {
         rollInfoLabel.text = ""
         rollButtonsNode.isHidden = true
         dealButtonNode.isHidden = true
-        reloadButtonNode.isHidden = true
-        chipButtonsNode.isHidden = true
-        winOptionsNode.isHidden = true
-        clearBetArea()
-        betAreaNode.isHidden = true
 
         updateScoreDisplay()
-
-        if betting.bettingEnabled {
-            if betting.isBroke {
-                handleBankruptcy()
-                return
-            }
-            gameState = .betting
-            chipButtonsNode.isHidden = false
-            betAreaNode.isHidden = false
-            updateChipButtonStates()
-            narrate("Place your bet.")
-        } else {
-            startNewHand()
-        }
+        startNewHand()
     }
 
     private func startNewHand() {
-        chipButtonsNode.isHidden = true
-        betAreaNode.isHidden = true
         gameState = .animating
         updateScoreDisplay()
 
-        narrate("Dealer rolls...")
+        narrate("Computer rolls...")
 
         run(SKAction.sequence([
             SKAction.wait(forDuration: 1.2),
@@ -604,7 +566,7 @@ class GameScene: SKScene {
         run(SKAction.sequence([
             SKAction.wait(forDuration: 1.0),
             SKAction.run { [weak self] in
-                self?.narrate("Dealer shows a \(revealedValue). Your turn!")
+                self?.narrate("Computer shows a \(revealedValue). Your turn!")
             },
             SKAction.wait(forDuration: 1.5),
             SKAction.run { [weak self] in
@@ -612,6 +574,7 @@ class GameScene: SKScene {
                 self?.rollButtonsNode.isHidden = false
                 self?.setStandVisible(false)
                 self?.updateRollInfo()
+                self?.updateProbabilityTable()
             }
         ]))
     }
@@ -679,8 +642,7 @@ class GameScene: SKScene {
                 if self.playerRollCount == 1 && diceCount == 3
                     && newValues.allSatisfy({ $0 == 6 }) {
                     self.finishHand(playerWon: true,
-                                   message: "Three sixes! 18! Instant winner!",
-                                   isThreeSixes: true)
+                                   message: "Three sixes! 18! Instant winner!")
                     return
                 }
 
@@ -690,8 +652,7 @@ class GameScene: SKScene {
                     return
                 }
 
-                let diceStr = newValues.map { String($0) }.joined(separator: " and ")
-                self.narrate("You rolled \(diceStr). Total: \(self.playerTotal)")
+                self.narrate("You have \(self.playerTotal).")
 
                 if self.playerTotal == 21 {
                     self.rollButtonsNode.isHidden = true
@@ -722,6 +683,7 @@ class GameScene: SKScene {
                 self.gameState = .playerTurn
                 self.setStandVisible(true)
                 self.updateRollInfo()
+                self.updateProbabilityTable()
             }
         ]))
     }
@@ -730,6 +692,7 @@ class GameScene: SKScene {
         guard gameState == .playerTurn, playerRollCount > 0 else { return }
         gameState = .animating
         rollButtonsNode.isHidden = true
+        updateProbabilityTable()
 
         narrate("You stand at \(playerTotal).")
 
@@ -758,7 +721,7 @@ class GameScene: SKScene {
             SKAction.wait(forDuration: 1.0),
             SKAction.run { [weak self] in
                 guard let self = self else { return }
-                self.narrate("Dealer has \(self.computerTotal).")
+                self.narrate("Computer has \(self.computerTotal).")
             },
             SKAction.wait(forDuration: 2.5),
             SKAction.run { [weak self] in self?.computerCompleteTurn() }
@@ -807,12 +770,11 @@ class GameScene: SKScene {
 
                 if self.computerTotal > 21 {
                     self.finishHand(playerWon: true,
-                                   message: "Dealer busts with \(self.computerTotal)! You win!")
+                                   message: "Computer busts with \(self.computerTotal)! You win!")
                     return
                 }
 
-                let diceStr = newValues.map { String($0) }.joined(separator: ", ")
-                self.narrate("Dealer rolls \(diceStr). Dealer has \(self.computerTotal).")
+                self.narrate("Computer has \(self.computerTotal).")
 
                 self.run(SKAction.sequence([
                     SKAction.wait(forDuration: 2.0),
@@ -827,39 +789,23 @@ class GameScene: SKScene {
     private func resolveHand() {
         if playerTotal > computerTotal {
             finishHand(playerWon: true,
-                       message: "You have \(playerTotal) to my \(computerTotal). You win!")
+                       message: "You have \(playerTotal) to Computer's \(computerTotal). You win!")
         } else if computerTotal > playerTotal {
             finishHand(playerWon: false,
-                       message: "I have \(computerTotal). I win.")
+                       message: "Computer has \(computerTotal). Computer wins.")
         } else {
             finishHand(playerWon: false,
-                       message: "Tie at \(playerTotal). Dealer wins.")
+                       message: "Tie at \(playerTotal). Computer wins.")
         }
     }
 
-    private func finishHand(playerWon: Bool, message: String, isThreeSixes: Bool = false) {
+    private func finishHand(playerWon: Bool, message: String) {
         if playerWon {
             playerWins += 1
-            if betting.bettingEnabled && betting.hasBet {
-                if isThreeSixes {
-                    let payout = betting.processThreeSixesWin()
-                    narrate("\(message) $\(payout) payout!")
-                } else {
-                    let profit = betting.processWin()
-                    narrate("\(message) You win $\(profit)!")
-                }
-            } else {
-                narrate(message)
-            }
         } else {
             computerWins += 1
-            if betting.bettingEnabled && betting.hasBet {
-                let lost = betting.processLoss()
-                narrate("\(message) You lose $\(lost).")
-            } else {
-                narrate(message)
-            }
         }
+        narrate(message)
         endHand(playerWon: playerWon)
     }
 
@@ -868,104 +814,14 @@ class GameScene: SKScene {
         rollButtonsNode.isHidden = true
         updateScoreDisplay()
 
+        LeaderboardManager.shared.recordScore(playerWins)
+        LeaderboardManager.shared.recordScore(computerWins, for: "A.Eye")
+
         run(SKAction.sequence([
             SKAction.wait(forDuration: 3.0),
             SKAction.run { [weak self] in
-                guard let self = self else { return }
-                if self.betting.bettingEnabled && playerWon {
-                    self.winOptionsNode.isHidden = false
-                } else {
-                    self.dealButtonNode.isHidden = false
-                }
+                self?.dealButtonNode.isHidden = false
             }
-        ]))
-    }
-
-    // MARK: - Betting
-
-    private func handleChipTap(_ denomination: Int) {
-        guard gameState == .betting else { return }
-        if betting.addChip(denomination) {
-            animateChipToBetArea(denomination: denomination)
-            updateScoreDisplay()
-            updateChipButtonStates()
-        }
-    }
-
-    private func handleClearBet() {
-        guard gameState == .betting else { return }
-        betting.clearBet()
-        clearBetArea()
-        updateScoreDisplay()
-        updateChipButtonStates()
-    }
-
-    private func handleBankruptcy() {
-        if betting.canReload() {
-            narrate("Tough luck. Here\u{2019}s a fresh $200 on the house.")
-            reloadButtonNode.isHidden = false
-        } else {
-            showCashierOverlay()
-        }
-    }
-
-    private func handleReload() {
-        betting.reload()
-        reloadButtonNode.isHidden = true
-        narrate("Fresh $200! Place your bet.")
-        updateScoreDisplay()
-
-        run(SKAction.sequence([
-            SKAction.wait(forDuration: 2.0),
-            SKAction.run { [weak self] in
-                self?.gameState = .betting
-                self?.chipButtonsNode.isHidden = false
-                self?.betAreaNode.isHidden = false
-                self?.updateChipButtonStates()
-            }
-        ]))
-    }
-
-    // MARK: - Win Options
-
-    private func handleLetItRide() {
-        winOptionsNode.isHidden = true
-        clearTable()
-        let chips = BettingManager.chipBreakdown(for: betting.lastWinnings)
-        for chip in chips { betting.addChip(chip) }
-        updateScoreDisplay()
-        narrate("Let it ride! $\(betting.currentBet)!")
-        run(SKAction.sequence([
-            SKAction.wait(forDuration: 1.5),
-            SKAction.run { [weak self] in self?.startNewHand() }
-        ]))
-    }
-
-    private func handleRepeatBet() {
-        winOptionsNode.isHidden = true
-        clearTable()
-        for chip in betting.lastBetChips { betting.addChip(chip) }
-        updateScoreDisplay()
-        narrate("Same bet. $\(betting.currentBet)!")
-        run(SKAction.sequence([
-            SKAction.wait(forDuration: 1.5),
-            SKAction.run { [weak self] in self?.startNewHand() }
-        ]))
-    }
-
-    private func handleNewBetOption() {
-        winOptionsNode.isHidden = true
-        beginNewRound()
-    }
-
-    private func handleTakeWinnings() {
-        winOptionsNode.isHidden = true
-        betting.bettingEnabled = false
-        narrate("Cashing out. Free play!")
-        updateScoreDisplay()
-        run(SKAction.sequence([
-            SKAction.wait(forDuration: 2.0),
-            SKAction.run { [weak self] in self?.beginNewRound() }
         ]))
     }
 
@@ -1062,16 +918,29 @@ class GameScene: SKScene {
         let gold = UIColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
         let headFont = UIFont.boldSystemFont(ofSize: 19)
         let bodyFont = UIFont.systemFont(ofSize: 17)
+        let monoFont = UIFont.monospacedSystemFont(ofSize: 15, weight: .regular)
+        let monoHeadFont = UIFont.monospacedSystemFont(ofSize: 15, weight: .bold)
         let headAttrs: [NSAttributedString.Key: Any] = [.font: headFont, .foregroundColor: gold]
         let bodyAttrs: [NSAttributedString.Key: Any] = [.font: bodyFont, .foregroundColor: UIColor.white]
+        let monoAttrs: [NSAttributedString.Key: Any] = [.font: monoFont, .foregroundColor: UIColor.white]
+        let monoHeadAttrs: [NSAttributedString.Key: Any] = [.font: monoHeadFont, .foregroundColor: gold]
 
         let text = NSMutableAttributedString()
         func head(_ s: String) { text.append(NSAttributedString(string: s + "\n", attributes: headAttrs)) }
         func body(_ s: String) { text.append(NSAttributedString(string: s + "\n", attributes: bodyAttrs)) }
+        func row(_ s: String) { text.append(NSAttributedString(string: s + "\n", attributes: monoAttrs)) }
+        func tableHead(_ s: String) { text.append(NSAttributedString(string: s + "\n", attributes: monoHeadAttrs)) }
         func gap() { text.append(NSAttributedString(string: "\n", attributes: bodyAttrs)) }
 
+        head("SETTINGS (\u{2699})")
+        body("Tap the gear icon (top right) to:")
+        body("\u{2022} Toggle voice narration")
+        body("\u{2022} Toggle the odds table")
+        body("\u{2022} View the leaderboard")
+        body("\u{2022} Change your user name")
+        gap()
         head("OBJECT")
-        body("Roll dice to get as close to 21 as possible without going over.")
+        body("Roll dice to get as close to 21 as possible without going over. Beat the computer to win the hand.")
         gap()
         head("YOUR TURN")
         body("Choose to roll 1, 2, or 3 dice.")
@@ -1079,28 +948,34 @@ class GameScene: SKScene {
         body("Tap Stand to keep your total.")
         gap()
         head("DEALER RULES")
-        body("Dealer rolls first, shows only one die.")
-        body("After you stand, dealer reveals all.")
-        body("Dealer must hit on 16 or less.")
-        body("Dealer must stand on 17 or higher.")
+        body("Computer rolls first, shows only one die.")
+        body("After you stand, Computer reveals all.")
+        body("Computer must hit on 16 or less.")
+        body("Computer must stand on 17 or higher.")
         gap()
         head("WINNING")
         body("Highest total at or below 21 wins.")
-        body("Ties go to the dealer.")
+        body("Ties go to Computer.")
         body("Three sixes on first roll = instant win!")
         gap()
         head("STRATEGY")
-        body("Watch the dealer\u{2019}s revealed die for clues.")
+        body("Watch the Computer\u{2019}s revealed die for clues.")
         body("Mix up dice count based on your total.")
         body("Standing at 17\u{2013}18 is often smart.")
-        body("The dealer can bust too!")
+        body("Computer can bust too!")
         gap()
-        head("BETTING")
-        body("Toggle betting on in Settings (\u{2699}).")
-        body("Place chips before each hand.")
-        body("Win pays 1:1.")
-        body("Three sixes on first roll pays $200 bonus.")
-        body("Starting bankroll: $200.")
+        head("ODDS TABLE")
+        body("Once your total reaches 10, an odds table appears on the left. Each row is a roll option (1, 2, or 3 dice).")
+        gap()
+        tableHead("COL     MEANING")
+        row("\u{1F340} 21    Chance of landing on 21")
+        row("17+     Chance of reaching 17\u{2013}21")
+        row("\u{1F480}       Chance of busting (over 21)")
+        row("")
+        row("N/A     Impossible (0%)")
+        row("X       Certain (100%)")
+        gap()
+        body("Toggle the table on or off in Settings.")
 
         return text
     }
@@ -1110,146 +985,355 @@ class GameScene: SKScene {
         howToPlayView = nil
     }
 
-    private func showSettings() {
-        let pw = size.width * 0.45
-        let ph = size.height * 0.50
+    // MARK: - Name Prompt
 
-        let container = SKNode()
+    private var nameTextField: UITextField?
 
-        let panel = SKShapeNode(rectOf: CGSize(width: pw, height: ph), cornerRadius: 12)
-        panel.fillColor = UIColor(red: 0.06, green: 0.22, blue: 0.08, alpha: 0.97)
-        panel.strokeColor = UIColor(red: 0.8, green: 0.6, blue: 0.2, alpha: 1)
-        panel.lineWidth = 2
-        container.addChild(panel)
+    private func showNamePrompt() {
+        guard let skView = self.view else { return }
 
-        let title = SKLabelNode(text: "SETTINGS")
-        title.fontName = "Helvetica-Bold"
-        title.fontSize = 22
-        title.fontColor = UIColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
-        title.position = CGPoint(x: 0, y: ph * 0.30)
-        title.verticalAlignmentMode = .center
-        container.addChild(title)
+        let container = UIView(frame: skView.bounds)
+        container.backgroundColor = UIColor(white: 0, alpha: 0.85)
 
-        let bettingLabel = SKLabelNode(text: "Betting:")
-        bettingLabel.fontName = "Helvetica"
-        bettingLabel.fontSize = 18
-        bettingLabel.fontColor = .white
-        bettingLabel.position = CGPoint(x: -pw * 0.15, y: 0)
-        bettingLabel.verticalAlignmentMode = .center
-        bettingLabel.horizontalAlignmentMode = .right
-        container.addChild(bettingLabel)
+        let pw = min(skView.bounds.width * 0.65, 500)
+        let ph: CGFloat = 280
+        let panel = UIView(frame: CGRect(
+            x: (skView.bounds.width - pw) / 2,
+            y: (skView.bounds.height - ph) / 2,
+            width: pw, height: ph
+        ))
+        panel.backgroundColor = UIColor(red: 0.06, green: 0.22, blue: 0.08, alpha: 0.97)
+        panel.layer.cornerRadius = 12
+        panel.layer.borderColor = UIColor(red: 0.8, green: 0.6, blue: 0.2, alpha: 1).cgColor
+        panel.layer.borderWidth = 2
+        container.addSubview(panel)
 
-        let stateText = betting.bettingEnabled ? "ON" : "OFF"
-        let stateColor = betting.bettingEnabled
-            ? UIColor(red: 0.3, green: 1, blue: 0.3, alpha: 1)
-            : UIColor(red: 1, green: 0.4, blue: 0.4, alpha: 1)
+        let title = UILabel(frame: CGRect(x: 0, y: 20, width: pw, height: 30))
+        title.text = nameChangeOnly ? "Change Player Name" : "Welcome to 21 With Dice!"
+        title.font = UIFont.boldSystemFont(ofSize: 22)
+        title.textColor = UIColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
+        title.textAlignment = .center
+        panel.addSubview(title)
 
-        let toggle = makeButton(text: stateText, width: 80, height: 36, name: "toggleBetting")
-        toggle.position = CGPoint(x: pw * 0.15, y: 0)
-        if let lbl = toggle.children.compactMap({ $0 as? SKLabelNode }).first {
-            lbl.fontColor = stateColor
+        let subtitle = UILabel(frame: CGRect(x: 20, y: 60, width: pw - 40, height: 50))
+        subtitle.text = nameChangeOnly
+            ? "Enter a new name. Leave blank to play without a name."
+            : "Enter your name (optional) to track your high score on the leaderboard:"
+        subtitle.font = UIFont.systemFont(ofSize: 16)
+        subtitle.textColor = .white
+        subtitle.textAlignment = .center
+        subtitle.numberOfLines = 0
+        panel.addSubview(subtitle)
+
+        let tf = UITextField(frame: CGRect(x: 30, y: 130, width: pw - 60, height: 40))
+        tf.borderStyle = .roundedRect
+        tf.font = UIFont.systemFont(ofSize: 18)
+        tf.placeholder = "Your name"
+        tf.text = nameChangeOnly ? LeaderboardManager.shared.playerName : nil
+        tf.autocapitalizationType = .words
+        tf.returnKeyType = .done
+        tf.addTarget(self, action: #selector(handleNamePromptOK), for: .editingDidEndOnExit)
+        panel.addSubview(tf)
+        nameTextField = tf
+
+        let skipBtn = UIButton(type: .system)
+        skipBtn.setTitle("Skip", for: .normal)
+        skipBtn.titleLabel?.font = UIFont.systemFont(ofSize: 17)
+        skipBtn.setTitleColor(.white, for: .normal)
+        skipBtn.backgroundColor = UIColor(white: 0.3, alpha: 1)
+        skipBtn.layer.cornerRadius = 8
+        skipBtn.frame = CGRect(x: pw * 0.10, y: 200, width: pw * 0.35, height: 40)
+        skipBtn.addTarget(self, action: #selector(handleNamePromptSkip), for: .touchUpInside)
+        panel.addSubview(skipBtn)
+
+        let startBtn = UIButton(type: .system)
+        startBtn.setTitle(nameChangeOnly ? "Save" : "Start Playing", for: .normal)
+        startBtn.titleLabel?.font = UIFont.boldSystemFont(ofSize: 17)
+        startBtn.setTitleColor(.white, for: .normal)
+        startBtn.backgroundColor = UIColor(red: 0.55, green: 0.10, blue: 0.10, alpha: 1)
+        startBtn.layer.cornerRadius = 8
+        startBtn.layer.borderColor = UIColor(red: 0.80, green: 0.60, blue: 0.18, alpha: 1).cgColor
+        startBtn.layer.borderWidth = 1.5
+        startBtn.frame = CGRect(x: pw * 0.55, y: 200, width: pw * 0.35, height: 40)
+        startBtn.addTarget(self, action: #selector(handleNamePromptOK), for: .touchUpInside)
+        panel.addSubview(startBtn)
+
+        skView.addSubview(container)
+        namePromptView = container
+        tf.becomeFirstResponder()
+    }
+
+    private var nameChangeOnly = false
+
+    @objc private func handleNamePromptOK() {
+        let name = nameTextField?.text?.trimmingCharacters(in: .whitespaces) ?? ""
+        if !name.isEmpty {
+            LeaderboardManager.shared.playerName = name
         }
-        container.addChild(toggle)
-
-        let close = makeButton(text: "Close", width: 100, height: 36, name: "closeOverlay")
-        close.position = CGPoint(x: 0, y: -ph * 0.30)
-        container.addChild(close)
-
-        showOverlay(content: container)
+        let changeOnly = nameChangeOnly
+        nameChangeOnly = false
+        dismissNamePrompt()
+        if !changeOnly {
+            showWelcomeScreen()
+        }
     }
 
-    private func showCashierOverlay() {
-        let pw = size.width * 0.50
-        let ph = size.height * 0.55
-
-        let container = SKNode()
-
-        let panel = SKShapeNode(rectOf: CGSize(width: pw, height: ph), cornerRadius: 12)
-        panel.fillColor = UIColor(red: 0.06, green: 0.22, blue: 0.08, alpha: 0.97)
-        panel.strokeColor = UIColor(red: 0.8, green: 0.6, blue: 0.2, alpha: 1)
-        panel.lineWidth = 2
-        container.addChild(panel)
-
-        let title = SKLabelNode(text: "OUT OF CHIPS")
-        title.fontName = "Helvetica-Bold"
-        title.fontSize = 22
-        title.fontColor = UIColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
-        title.position = CGPoint(x: 0, y: ph * 0.30)
-        title.verticalAlignmentMode = .center
-        container.addChild(title)
-
-        let priceStr = ChipStoreManager.shared.priceString
-        let desc = SKLabelNode(text: "Buy $1,000 in chips for \(priceStr)")
-        desc.fontName = "Helvetica"
-        desc.fontSize = 16
-        desc.fontColor = .white
-        desc.position = CGPoint(x: 0, y: ph * 0.05)
-        desc.verticalAlignmentMode = .center
-        container.addChild(desc)
-
-        let buyBtn = makeButton(text: "Buy Chips", width: pw * 0.40, height: 40, name: "buyChips")
-        buyBtn.position = CGPoint(x: -pw * 0.15, y: -ph * 0.18)
-        container.addChild(buyBtn)
-
-        let noBtn = makeButton(text: "No Thanks", width: pw * 0.40, height: 40, name: "noThanks")
-        noBtn.position = CGPoint(x: pw * 0.15, y: -ph * 0.18)
-        container.addChild(noBtn)
-
-        showOverlay(content: container)
+    @objc private func handleNamePromptSkip() {
+        let changeOnly = nameChangeOnly
+        nameChangeOnly = false
+        dismissNamePrompt()
+        if !changeOnly {
+            showWelcomeScreen()
+        }
     }
 
-    private func toggleBetting() {
-        betting.bettingEnabled.toggle()
-        if !betting.bettingEnabled { betting.clearBet() }
-        dismissOverlay()
+    @objc private func handleChangeName() {
+        dismissSettings()
+        nameChangeOnly = true
+        showNamePrompt()
+    }
 
-        if gameState == .betting && !betting.bettingEnabled {
-            chipButtonsNode.isHidden = true
-            betAreaNode.isHidden = true
-            clearBetArea()
-            updateScoreDisplay()
-            startNewHand()
-        } else if gameState == .handOver {
-            updateScoreDisplay()
+    private func dismissNamePrompt() {
+        self.view?.endEditing(true)
+        namePromptView?.removeFromSuperview()
+        namePromptView = nil
+        nameTextField = nil
+    }
+
+    // MARK: - Leaderboard
+
+    private func showLeaderboard() {
+        guard let skView = self.view else { return }
+
+        let container = UIView(frame: skView.bounds)
+        container.backgroundColor = UIColor(white: 0, alpha: 0.85)
+
+        let pw = min(skView.bounds.width * 0.7, 560)
+        let ph = min(skView.bounds.height * 0.85, 500)
+        let panel = UIView(frame: CGRect(
+            x: (skView.bounds.width - pw) / 2,
+            y: (skView.bounds.height - ph) / 2,
+            width: pw, height: ph
+        ))
+        panel.backgroundColor = UIColor(red: 0.06, green: 0.22, blue: 0.08, alpha: 0.97)
+        panel.layer.cornerRadius = 12
+        panel.layer.borderColor = UIColor(red: 0.8, green: 0.6, blue: 0.2, alpha: 1).cgColor
+        panel.layer.borderWidth = 2
+        panel.clipsToBounds = true
+        container.addSubview(panel)
+
+        let title = UILabel(frame: CGRect(x: 0, y: 14, width: pw, height: 30))
+        title.text = "LEADERBOARD"
+        title.font = UIFont.boldSystemFont(ofSize: 22)
+        title.textColor = UIColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
+        title.textAlignment = .center
+        panel.addSubview(title)
+
+        let closeBtn = UIButton(type: .system)
+        closeBtn.setTitle("\u{2715}", for: .normal)
+        closeBtn.titleLabel?.font = UIFont.boldSystemFont(ofSize: 18)
+        closeBtn.setTitleColor(.white, for: .normal)
+        closeBtn.backgroundColor = UIColor(red: 0.55, green: 0.10, blue: 0.10, alpha: 1)
+        closeBtn.layer.cornerRadius = 15
+        closeBtn.layer.borderColor = UIColor(red: 0.80, green: 0.60, blue: 0.18, alpha: 1).cgColor
+        closeBtn.layer.borderWidth = 1.5
+        closeBtn.frame = CGRect(x: pw - 42, y: 12, width: 30, height: 30)
+        closeBtn.addTarget(self, action: #selector(dismissLeaderboard), for: .touchUpInside)
+        panel.addSubview(closeBtn)
+
+        let entries = LeaderboardManager.shared.entries
+        let listX: CGFloat = 28
+        let listW = pw - 56
+        let listY: CGFloat = 56
+        let rowHeight: CGFloat = 30
+        let goldColor = UIColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
+
+        let headerRow = UIView(frame: CGRect(x: listX, y: listY, width: listW, height: rowHeight))
+        let rankH = UILabel(frame: CGRect(x: 0, y: 0, width: 40, height: rowHeight))
+        rankH.text = "#"
+        rankH.font = UIFont.boldSystemFont(ofSize: 14)
+        rankH.textColor = goldColor
+        headerRow.addSubview(rankH)
+        let nameH = UILabel(frame: CGRect(x: 45, y: 0, width: listW * 0.55, height: rowHeight))
+        nameH.text = "Name"
+        nameH.font = UIFont.boldSystemFont(ofSize: 14)
+        nameH.textColor = goldColor
+        headerRow.addSubview(nameH)
+        let scoreH = UILabel(frame: CGRect(x: listW * 0.65, y: 0, width: listW * 0.35, height: rowHeight))
+        scoreH.text = "Wins"
+        scoreH.font = UIFont.boldSystemFont(ofSize: 14)
+        scoreH.textColor = goldColor
+        scoreH.textAlignment = .right
+        headerRow.addSubview(scoreH)
+        panel.addSubview(headerRow)
+
+        if entries.isEmpty {
+            let empty = UILabel(frame: CGRect(x: 20, y: listY + rowHeight + 30, width: pw - 40, height: 40))
+            empty.text = "No scores yet \u{2014} start playing!"
+            empty.font = UIFont.systemFont(ofSize: 16)
+            empty.textColor = UIColor(white: 0.7, alpha: 1)
+            empty.textAlignment = .center
+            panel.addSubview(empty)
         } else {
-            showSettings()
-        }
-    }
-
-    private func handleBuyChips() {
-        Task {
-            let success = await ChipStoreManager.shared.purchase()
-            await MainActor.run { [weak self] in
-                guard let self = self else { return }
-                self.dismissOverlay()
-                if success {
-                    self.narrate("$1,000 in chips added!")
-                    self.updateScoreDisplay()
-                    self.run(SKAction.sequence([
-                        SKAction.wait(forDuration: 2.0),
-                        SKAction.run { [weak self] in
-                            self?.gameState = .betting
-                            self?.chipButtonsNode.isHidden = false
-                            self?.betAreaNode.isHidden = false
-                            self?.updateChipButtonStates()
-                        }
-                    ]))
-                } else {
-                    self.handleNoThanks()
-                }
+            for (i, entry) in entries.enumerated() {
+                let y = listY + CGFloat(i + 1) * rowHeight
+                let row = UIView(frame: CGRect(x: listX, y: y, width: listW, height: rowHeight))
+                let rank = UILabel(frame: CGRect(x: 0, y: 0, width: 40, height: rowHeight))
+                rank.text = "\(i + 1)."
+                rank.font = UIFont.systemFont(ofSize: 16)
+                rank.textColor = .white
+                row.addSubview(rank)
+                let name = UILabel(frame: CGRect(x: 45, y: 0, width: listW * 0.55, height: rowHeight))
+                name.text = entry.name
+                name.font = UIFont.systemFont(ofSize: 16)
+                name.textColor = .white
+                row.addSubview(name)
+                let score = UILabel(frame: CGRect(x: listW * 0.65, y: 0, width: listW * 0.35, height: rowHeight))
+                score.text = "\(entry.score)"
+                score.font = UIFont.boldSystemFont(ofSize: 16)
+                score.textColor = goldColor
+                score.textAlignment = .right
+                row.addSubview(score)
+                panel.addSubview(row)
             }
         }
+
+        let resetBtn = UIButton(type: .system)
+        resetBtn.setTitle("Reset Leaderboard", for: .normal)
+        resetBtn.titleLabel?.font = UIFont.boldSystemFont(ofSize: 15)
+        resetBtn.setTitleColor(.white, for: .normal)
+        resetBtn.backgroundColor = UIColor(white: 0.3, alpha: 1)
+        resetBtn.layer.cornerRadius = 8
+        resetBtn.frame = CGRect(x: (pw - 200) / 2, y: ph - 54, width: 200, height: 38)
+        resetBtn.addTarget(self, action: #selector(handleResetLeaderboard), for: .touchUpInside)
+        panel.addSubview(resetBtn)
+
+        skView.addSubview(container)
+        leaderboardView = container
     }
 
-    private func handleNoThanks() {
-        dismissOverlay()
-        betting.bettingEnabled = false
-        narrate("Betting disabled. Free play!")
-        updateScoreDisplay()
-        run(SKAction.sequence([
-            SKAction.wait(forDuration: 2.0),
-            SKAction.run { [weak self] in self?.beginNewRound() }
-        ]))
+    @objc private func dismissLeaderboard() {
+        leaderboardView?.removeFromSuperview()
+        leaderboardView = nil
+    }
+
+    @objc private func handleResetLeaderboard() {
+        LeaderboardManager.shared.reset()
+        dismissLeaderboard()
+        showLeaderboard()
+    }
+
+    private func showSettings() {
+        guard let skView = self.view else { return }
+
+        let container = UIView(frame: skView.bounds)
+        container.backgroundColor = UIColor(white: 0, alpha: 0.85)
+
+        let pw = min(skView.bounds.width * 0.55, 460)
+        let ph: CGFloat = 320
+        let panel = UIView(frame: CGRect(
+            x: (skView.bounds.width - pw) / 2,
+            y: (skView.bounds.height - ph) / 2,
+            width: pw, height: ph
+        ))
+        panel.backgroundColor = UIColor(red: 0.06, green: 0.22, blue: 0.08, alpha: 0.97)
+        panel.layer.cornerRadius = 12
+        panel.layer.borderColor = UIColor(red: 0.8, green: 0.6, blue: 0.2, alpha: 1).cgColor
+        panel.layer.borderWidth = 2
+        container.addSubview(panel)
+
+        let title = UILabel(frame: CGRect(x: 0, y: 16, width: pw, height: 30))
+        title.text = "SETTINGS"
+        title.font = UIFont.boldSystemFont(ofSize: 22)
+        title.textColor = UIColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
+        title.textAlignment = .center
+        panel.addSubview(title)
+
+        let closeBtn = UIButton(type: .system)
+        closeBtn.setTitle("\u{2715}", for: .normal)
+        closeBtn.titleLabel?.font = UIFont.boldSystemFont(ofSize: 18)
+        closeBtn.setTitleColor(.white, for: .normal)
+        closeBtn.backgroundColor = UIColor(red: 0.55, green: 0.10, blue: 0.10, alpha: 1)
+        closeBtn.layer.cornerRadius = 15
+        closeBtn.layer.borderColor = UIColor(red: 0.80, green: 0.60, blue: 0.18, alpha: 1).cgColor
+        closeBtn.layer.borderWidth = 1.5
+        closeBtn.frame = CGRect(x: pw - 42, y: 14, width: 30, height: 30)
+        closeBtn.addTarget(self, action: #selector(dismissSettings), for: .touchUpInside)
+        panel.addSubview(closeBtn)
+
+        let voiceLabel = UILabel(frame: CGRect(x: 40, y: 80, width: pw - 130, height: 36))
+        voiceLabel.text = "Voice"
+        voiceLabel.font = UIFont.systemFont(ofSize: 19)
+        voiceLabel.textColor = .white
+        panel.addSubview(voiceLabel)
+
+        let voiceSwitch = UISwitch()
+        voiceSwitch.isOn = voiceEnabled
+        voiceSwitch.frame = CGRect(x: pw - 95, y: 84, width: 51, height: 31)
+        voiceSwitch.onTintColor = UIColor(red: 0.3, green: 0.75, blue: 0.3, alpha: 1)
+        voiceSwitch.addTarget(self, action: #selector(voiceSwitchChanged(_:)), for: .valueChanged)
+        panel.addSubview(voiceSwitch)
+
+        let oddsLabel = UILabel(frame: CGRect(x: 40, y: 128, width: pw - 130, height: 36))
+        oddsLabel.text = "Odds Table"
+        oddsLabel.font = UIFont.systemFont(ofSize: 19)
+        oddsLabel.textColor = .white
+        panel.addSubview(oddsLabel)
+
+        let oddsSwitch = UISwitch()
+        oddsSwitch.isOn = oddsTableEnabled
+        oddsSwitch.frame = CGRect(x: pw - 95, y: 132, width: 51, height: 31)
+        oddsSwitch.onTintColor = UIColor(red: 0.3, green: 0.75, blue: 0.3, alpha: 1)
+        oddsSwitch.addTarget(self, action: #selector(oddsTableSwitchChanged(_:)), for: .valueChanged)
+        panel.addSubview(oddsSwitch)
+
+        let sep = UIView(frame: CGRect(x: 30, y: 188, width: pw - 60, height: 1))
+        sep.backgroundColor = UIColor(white: 1, alpha: 0.18)
+        panel.addSubview(sep)
+
+        let lbBtn = UIButton(type: .system)
+        lbBtn.setTitle("View Leaderboard", for: .normal)
+        lbBtn.titleLabel?.font = UIFont.boldSystemFont(ofSize: 17)
+        lbBtn.setTitleColor(.white, for: .normal)
+        lbBtn.backgroundColor = UIColor(red: 0.55, green: 0.10, blue: 0.10, alpha: 1)
+        lbBtn.layer.cornerRadius = 8
+        lbBtn.layer.borderColor = UIColor(red: 0.80, green: 0.60, blue: 0.18, alpha: 1).cgColor
+        lbBtn.layer.borderWidth = 1.5
+        lbBtn.frame = CGRect(x: (pw - 220) / 2, y: 210, width: 220, height: 38)
+        lbBtn.addTarget(self, action: #selector(handleOpenLeaderboard), for: .touchUpInside)
+        panel.addSubview(lbBtn)
+
+        let changeNameBtn = UIButton(type: .system)
+        changeNameBtn.setTitle("Change User Name", for: .normal)
+        changeNameBtn.titleLabel?.font = UIFont.systemFont(ofSize: 16)
+        changeNameBtn.setTitleColor(.white, for: .normal)
+        changeNameBtn.backgroundColor = UIColor(white: 0.3, alpha: 1)
+        changeNameBtn.layer.cornerRadius = 8
+        changeNameBtn.frame = CGRect(x: (pw - 180) / 2, y: 260, width: 180, height: 34)
+        changeNameBtn.addTarget(self, action: #selector(handleChangeName), for: .touchUpInside)
+        panel.addSubview(changeNameBtn)
+
+        skView.addSubview(container)
+        settingsView = container
+    }
+
+    @objc private func dismissSettings() {
+        settingsView?.removeFromSuperview()
+        settingsView = nil
+    }
+
+    @objc private func voiceSwitchChanged(_ sender: UISwitch) {
+        voiceEnabled = sender.isOn
+    }
+
+    @objc private func oddsTableSwitchChanged(_ sender: UISwitch) {
+        oddsTableEnabled = sender.isOn
+        updateProbabilityTable()
+    }
+
+    @objc private func handleOpenLeaderboard() {
+        dismissSettings()
+        showLeaderboard()
     }
 
     // MARK: - Touch Handling
@@ -1278,23 +1362,11 @@ class GameScene: SKScene {
         case "roll3":       playClick(); handlePlayerRoll(diceCount: 3)
         case "stand":       handleStand()
         case "deal":        beginNewRound()
-        case "dealBet":
-            guard gameState == .betting, betting.hasBet else { return }
-            startNewHand()
-        case "chip5":       handleChipTap(5)
-        case "chip25":      handleChipTap(25)
-        case "chip100":     handleChipTap(100)
-        case "clearBet":    handleClearBet()
         case "helpBtn":     showHowToPlay()
         case "settingsBtn":
-            if gameState == .betting || gameState == .handOver || gameState == .idle {
+            if gameState == .handOver || gameState == .idle {
                 showSettings()
             }
-        case "reloadBtn":   handleReload()
-        case "letItRide":   handleLetItRide()
-        case "repeatBet":   handleRepeatBet()
-        case "newBet":      handleNewBetOption()
-        case "takeWinnings": handleTakeWinnings()
         default: break
         }
     }
@@ -1302,21 +1374,18 @@ class GameScene: SKScene {
     private func handleOverlayButton(_ name: String) {
         switch name {
         case "closeOverlay":    dismissOverlay()
-        case "toggleBetting":   toggleBetting()
-        case "buyChips":        handleBuyChips()
-        case "noThanks":        handleNoThanks()
         default: break
         }
     }
 
+
+
     private func findButton(at point: CGPoint) -> String? {
         let touched = nodes(at: point)
         let buttonNames: Set<String> = [
-            "roll1", "roll2", "roll3", "stand", "deal", "dealBet",
-            "chip5", "chip25", "chip100", "clearBet",
-            "helpBtn", "settingsBtn", "reloadBtn",
-            "closeOverlay", "toggleBetting", "buyChips", "noThanks",
-            "letItRide", "repeatBet", "newBet", "takeWinnings"
+            "roll1", "roll2", "roll3", "stand", "deal",
+            "helpBtn", "settingsBtn",
+            "closeOverlay"
         ]
         for node in touched {
             var current: SKNode? = node
