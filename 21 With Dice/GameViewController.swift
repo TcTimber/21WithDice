@@ -10,6 +10,8 @@ class GameViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        GameCenterManager.shared.presentingViewController = self
+        GameCenterManager.shared.authenticate()
     }
 
     override func viewDidLayoutSubviews() {
@@ -24,7 +26,7 @@ class GameViewController: UIViewController {
     }
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
-        return .landscape
+        return .all
     }
 
     override var prefersStatusBarHidden: Bool {
