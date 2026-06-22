@@ -72,6 +72,10 @@ class GameScene: SKScene {
     private var helpButtonNode: SKNode!
     private var settingsButtonNode: SKNode!
 
+    // MARK: - UI Nodes — Rails
+
+    private var railsNode: SKNode!
+
     // MARK: - UI Nodes — Probability Table
 
     private var probabilityTableNode: SKNode!
@@ -112,6 +116,31 @@ class GameScene: SKScene {
         }
     }
 
+    override func didChangeSize(_ oldSize: CGSize) {
+        super.didChangeSize(oldSize)
+        guard oldSize != size, oldSize != .zero, dealerTitleLabel != nil else { return }
+
+        dieSize = min(size.width, size.height) * 0.09
+        layoutScene()
+        repositionDice()
+    }
+
+    private func repositionDice() {
+        let dealerPositions = dicePositions(count: dealerDiceNodes.count,
+                                            centerX: size.width * 0.5,
+                                            centerY: size.height * 0.78)
+        for (i, die) in dealerDiceNodes.enumerated() {
+            die.run(SKAction.move(to: dealerPositions[i], duration: 0.2))
+        }
+
+        let playerPositions = dicePositions(count: playerDiceNodes.count,
+                                            centerX: size.width * 0.5,
+                                            centerY: size.height * 0.21)
+        for (i, die) in playerDiceNodes.enumerated() {
+            die.run(SKAction.move(to: playerPositions[i], duration: 0.2))
+        }
+    }
+
     private func showWelcomeScreen() {
         clearTable()
         rollInfoLabel.text = ""
@@ -130,62 +159,87 @@ class GameScene: SKScene {
     private func setupScene() {
         backgroundColor = UIColor(red: 0.04, green: 0.32, blue: 0.10, alpha: 1.0)
 
-        let w = size.width
-        let h = size.height
-
-        setupMenuButtons()
-
         // Dealer area
         dealerTitleLabel = makeLabel("COMPUTER", size: 22, bold: true)
-        dealerTitleLabel.position = CGPoint(x: w * 0.14, y: h * 0.91)
         dealerTitleLabel.horizontalAlignmentMode = .left
         addChild(dealerTitleLabel)
 
         dealerTotalLabel = makeLabel("Total: --", size: 18, bold: false)
-        dealerTotalLabel.position = CGPoint(x: w * 0.88, y: h * 0.91)
         dealerTotalLabel.horizontalAlignmentMode = .right
         addChild(dealerTotalLabel)
-
-        addRail(y: h * 0.66)
 
         // Narration
         narrationLabel = makeLabel("", size: 24, bold: true)
         narrationLabel.fontColor = UIColor(red: 1.0, green: 0.85, blue: 0.2, alpha: 1.0)
-        narrationLabel.position = CGPoint(x: w * 0.5, y: h * 0.57)
         narrationLabel.horizontalAlignmentMode = .center
         narrationLabel.numberOfLines = 2
-        narrationLabel.preferredMaxLayoutWidth = w * 0.75
         addChild(narrationLabel)
 
         // Score
         scoreLabel = makeLabel("Wins: 0  |  Losses: 0", size: 15, bold: false)
         scoreLabel.fontColor = UIColor(white: 0.8, alpha: 1)
-        scoreLabel.position = CGPoint(x: w * 0.5, y: h * 0.38)
         scoreLabel.horizontalAlignmentMode = .center
         addChild(scoreLabel)
 
-        addRail(y: h * 0.33)
-
         // Player area
         playerTitleLabel = makeLabel("YOU", size: 22, bold: true)
-        playerTitleLabel.position = CGPoint(x: w * 0.08, y: h * 0.28)
         playerTitleLabel.horizontalAlignmentMode = .left
         addChild(playerTitleLabel)
 
         playerTotalLabel = makeLabel("Total: 0", size: 18, bold: false)
-        playerTotalLabel.position = CGPoint(x: w * 0.92, y: h * 0.28)
         playerTotalLabel.horizontalAlignmentMode = .right
         addChild(playerTotalLabel)
 
         rollInfoLabel = makeLabel("", size: 14, bold: false)
         rollInfoLabel.fontColor = UIColor(white: 0.65, alpha: 1)
-        rollInfoLabel.position = CGPoint(x: w * 0.5, y: h * 0.14)
         rollInfoLabel.horizontalAlignmentMode = .center
         addChild(rollInfoLabel)
 
+        railsNode = SKNode()
+        addChild(railsNode)
+
+        setupProbabilityTable()
+        setupMenuButtons()
         setupRollButtons()
         setupDealButton()
-        setupProbabilityTable()
+
+        layoutScene()
+    }
+
+    // MARK: - Layout (size-dependent positioning, called on setup and rotation)
+
+    private func layoutScene() {
+        let w = size.width
+        let h = size.height
+
+        dealerTitleLabel.position = CGPoint(x: w * 0.14, y: h * 0.91)
+        dealerTotalLabel.position = CGPoint(x: w * 0.88, y: h * 0.91)
+
+        narrationLabel.position = CGPoint(x: w * 0.5, y: h * 0.57)
+        narrationLabel.preferredMaxLayoutWidth = w * 0.75
+
+        scoreLabel.position = CGPoint(x: w * 0.5, y: h * 0.38)
+
+        playerTitleLabel.position = CGPoint(x: w * 0.08, y: h * 0.28)
+        playerTotalLabel.position = CGPoint(x: w * 0.92, y: h * 0.28)
+        rollInfoLabel.position = CGPoint(x: w * 0.5, y: h * 0.14)
+
+        let probTableW = 68 * uiScale + 3 * 68 * uiScale + 14
+        let probYOffset: CGFloat = -15 * (uiScale - 1.0) / 0.7
+        probabilityTableNode.position = CGPoint(x: probTableW / 2 + 12, y: h * 0.50 + probYOffset)
+
+        rebuildRails()
+        layoutMenuButtons()
+        layoutRollButtons()
+        layoutDealButton()
+
+        updateProbabilityTable()
+    }
+
+    private func rebuildRails() {
+        railsNode.removeAllChildren()
+        addRail(y: size.height * 0.66)
+        addRail(y: size.height * 0.33)
     }
 
     private func setupProbabilityTable() {
@@ -274,12 +328,23 @@ class GameScene: SKScene {
     }
 
     private func setupMenuButtons() {
+        helpButtonNode = SKNode()
+        helpButtonNode.name = "helpBtn"
+        addChild(helpButtonNode)
+
+        settingsButtonNode = SKNode()
+        settingsButtonNode.name = "settingsBtn"
+        addChild(settingsButtonNode)
+
+        layoutMenuButtons()
+    }
+
+    private func layoutMenuButtons() {
         let w = size.width
         let h = size.height
         let r: CGFloat = 16
 
-        helpButtonNode = SKNode()
-        helpButtonNode.name = "helpBtn"
+        helpButtonNode.removeAllChildren()
         helpButtonNode.position = CGPoint(x: w * 0.05, y: h * 0.91)
         let hBg = SKShapeNode(circleOfRadius: r)
         hBg.fillColor = UIColor(white: 0.15, alpha: 0.85)
@@ -290,10 +355,8 @@ class GameScene: SKScene {
         hLbl.fontName = "Helvetica-Bold"; hLbl.fontSize = 18 * uiScale; hLbl.fontColor = .white
         hLbl.verticalAlignmentMode = .center; hLbl.name = "helpBtn"
         helpButtonNode.addChild(hLbl)
-        addChild(helpButtonNode)
 
-        settingsButtonNode = SKNode()
-        settingsButtonNode.name = "settingsBtn"
+        settingsButtonNode.removeAllChildren()
         settingsButtonNode.position = CGPoint(x: w * 0.95, y: h * 0.91)
         let sBg = SKShapeNode(circleOfRadius: r)
         sBg.fillColor = UIColor(white: 0.15, alpha: 0.85)
@@ -303,7 +366,6 @@ class GameScene: SKScene {
         let sLbl = SKLabelNode(text: "\u{2699}")
         sLbl.fontSize = 20 * uiScale; sLbl.verticalAlignmentMode = .center; sLbl.name = "settingsBtn"
         settingsButtonNode.addChild(sLbl)
-        addChild(settingsButtonNode)
     }
 
     private func addRail(y: CGFloat) {
@@ -313,24 +375,31 @@ class GameScene: SKScene {
         rail.strokeColor = UIColor(red: 0.30, green: 0.15, blue: 0.05, alpha: 1.0)
         rail.lineWidth = 1.5
         rail.position = CGPoint(x: w * 0.5, y: y)
-        addChild(rail)
+        railsNode.addChild(rail)
 
         let trim = SKShapeNode(rectOf: CGSize(width: w * 0.86, height: 1.5))
         trim.fillColor = UIColor(red: 0.75, green: 0.60, blue: 0.25, alpha: 0.5)
         trim.strokeColor = .clear
         trim.position = CGPoint(x: w * 0.5, y: y + 4)
-        addChild(trim)
+        railsNode.addChild(trim)
     }
 
     private func setupRollButtons() {
+        rollButtonsNode = SKNode()
+        rollButtonsNode.isHidden = true
+        addChild(rollButtonsNode)
+        layoutRollButtons()
+    }
+
+    private func layoutRollButtons() {
         let w = size.width
         let h = size.height
         let btnW = w * 0.17
         let btnH: CGFloat = 42
         let y = h * 0.06
 
-        rollButtonsNode = SKNode()
-        addChild(rollButtonsNode)
+        let standAlpha = rollButtonsNode.childNode(withName: "stand")?.alpha ?? 1.0
+        rollButtonsNode.removeAllChildren()
 
         let btn1 = makeButton(text: "Roll 1 Die", width: btnW, height: btnH, name: "roll1")
         btn1.position = CGPoint(x: w * 0.17, y: y)
@@ -346,19 +415,28 @@ class GameScene: SKScene {
 
         let stand = makeButton(text: "Stand", width: btnW * 0.7, height: btnH, name: "stand")
         stand.position = CGPoint(x: w * 0.82, y: y)
+        stand.alpha = standAlpha
         rollButtonsNode.addChild(stand)
-
-        rollButtonsNode.isHidden = true
     }
 
     private func setupDealButton() {
         let w = size.width
         let h = size.height
-
         dealButtonNode = makeButton(text: "New Hand", width: w * 0.22, height: 46, name: "deal")
         dealButtonNode.position = CGPoint(x: w * 0.5, y: h * 0.06)
-        addChild(dealButtonNode)
         dealButtonNode.isHidden = true
+        addChild(dealButtonNode)
+    }
+
+    private func layoutDealButton() {
+        let w = size.width
+        let h = size.height
+        let wasHidden = dealButtonNode.isHidden
+        dealButtonNode.removeFromParent()
+        dealButtonNode = makeButton(text: "New Hand", width: w * 0.22, height: 46, name: "deal")
+        dealButtonNode.position = CGPoint(x: w * 0.5, y: h * 0.06)
+        dealButtonNode.isHidden = wasHidden
+        addChild(dealButtonNode)
     }
 
     // MARK: - UI Helpers
@@ -705,6 +783,7 @@ class GameScene: SKScene {
     // MARK: - Computer Turn
 
     private func beginComputerReveal() {
+        probabilityTableNode.isHidden = true
         for (i, die) in dealerDiceNodes.enumerated() {
             if die.isFaceDown {
                 let val = computerDiceValues[i]
@@ -800,6 +879,7 @@ class GameScene: SKScene {
     }
 
     private func finishHand(playerWon: Bool, message: String) {
+        probabilityTableNode.isHidden = true
         if playerWon {
             playerWins += 1
         } else {
@@ -816,6 +896,7 @@ class GameScene: SKScene {
 
         LeaderboardManager.shared.recordScore(playerWins)
         LeaderboardManager.shared.recordScore(computerWins, for: "A.Eye")
+        GameCenterManager.shared.reportMostWins(playerWins)
 
         run(SKAction.sequence([
             SKAction.wait(forDuration: 3.0),
@@ -1333,7 +1414,11 @@ class GameScene: SKScene {
 
     @objc private func handleOpenLeaderboard() {
         dismissSettings()
-        showLeaderboard()
+        if GameCenterManager.shared.isAuthenticated {
+            GameCenterManager.shared.presentLeaderboard()
+        } else {
+            showLeaderboard()
+        }
     }
 
     // MARK: - Touch Handling
